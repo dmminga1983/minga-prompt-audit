@@ -1,84 +1,84 @@
 # minga-prompt-audit
 
-**Аудит промптов и скиллов Claude: устаревшие приёмы, противоречия, мёртвые ссылки, раздувание — с отчётом по строкам и готовым diff.**
+**An audit skill for Claude prompts and skills: outdated techniques, conflicts, dead references and bloat — reported line by line with a ready-to-apply diff.**
 
-[English](README.en.md) · Часть экосистемы [Minga](https://github.com/dmminga1983/minga)
+Part of the [Minga](https://github.com/dmminga1983/minga) ecosystem. The skill checks `CLAUDE.md`, `AGENTS.md`, `SKILL.md`, rules, commands, subagents and system prompts for patterns that hold modern Claude models back: ALL-CAPS pressure, forced reasoning scaffolds, rules that contradict each other, references to files that don't exist, duplicates. Nothing in your files changes until you say "apply".
 
-Скилл проверяет `CLAUDE.md`, `AGENTS.md`, `SKILL.md`, правила, команды, субагентов и системные промпты на то, что мешает современным моделям Claude: капс и давление, навязанные шаблоны рассуждений, правила, которые спорят друг с другом, ссылки на несуществующие файлы, дубли. Файлы не меняются, пока вы не скажете «применить».
+[Русская версия →](README.ru.md)
 
-## Чем отличается от встроенного `prompt-audit`
+## How it differs from the built-in `prompt-audit`
 
 | | `/claude-api prompt-audit`, `/doctor prompt-audit` | minga-prompt-audit |
 |---|---|---|
-| Где работает | Claude Code CLI | claude.ai, Claude Code, любой агент со скиллами |
-| Каталог проверок | не опубликован | открытый, с ID и примерами ([checks/](checks/)) |
-| Русский язык | — | русские шаблоны давления и ролей, аббревиатуры (ГОСТ, СП, ЖК) не считаются капсом |
-| Детерминированный сканер | — | `scripts/scan.py` без зависимостей + тесты |
-| Защищённые строки | keep-list | `<!-- keep -->` и блоки `<!-- keep:start -->…<!-- keep:end -->` |
+| Where it runs | Claude Code CLI | claude.ai, Claude Code, any agent that supports skills |
+| Check catalogue | not published | open, with IDs and examples ([checks/](checks/)) |
+| Russian text | — | Russian pressure and persona patterns; abbreviations such as ГОСТ, СП, ЖК are not treated as caps |
+| Deterministic scanner | — | `scripts/scan.py`, no dependencies, with tests |
+| Protected lines | keep-list | `<!-- keep -->` and `<!-- keep:start -->…<!-- keep:end -->` blocks |
 
-## Что проверяется (v1.0)
+## What it checks (v1.0)
 
-| Блок | Проверки |
+| Block | Checks |
 |---|---|
-| **A. Приёмы под старые модели** | A1 капс-давление · A2 угрозы и награды · A3 «думай пошагово» · A4 пустая роль · A5 повтор для надёжности · A6 абсолюты без причины · A7 только запреты |
-| **B. Противоречия** | B1 в файле · B2 между файлами · B3 формат/язык · B4 неясный приоритет |
-| **C. Мёртвые ссылки** | C1 файлы и `@импорты` · C2 команды и скрипты · C3 инструменты и скиллы · C4 устаревшие модели |
-| **D. Дубли и раздувание** | D1 повторы · D2 длинные примеры · D3 очевидное · D4 слишком большие файлы |
+| **A. Outdated techniques** | A1 caps pressure · A2 threats and rewards · A3 "think step by step" · A4 empty persona · A5 repeating a rule "to be safe" · A6 absolutes without a reason · A7 prohibitions only |
+| **B. Conflicts** | B1 within a file · B2 across files · B3 format/language · B4 unclear priority |
+| **C. Dead references** | C1 files and `@imports` · C2 commands and scripts · C3 tools and skills · C4 outdated model names |
+| **D. Bloat** | D1 duplicates · D2 long examples · D3 the obvious · D4 oversized files |
 
-Подробные критерии — в [checks/](checks/), примеры «до/после» — в [examples/](examples/before-after.md).
+Detailed criteria are in [checks/](checks/) (in Russian), before/after examples in [examples/](examples/before-after.md).
 
-**В следующей версии (1.1):** E — структура SKILL.md и качество `description`, F — безопасность (секреты в промптах, prompt injection в описаниях инструментов), G — ясность (критерии и формат результата), H — оценка срабатывания скилла.
+**Coming in 1.1:** E — SKILL.md structure and `description` quality, F — security (secrets in prompts, prompt injection in tool descriptions), G — clarity (success criteria and output format), H — skill triggering.
 
-## Установка
+## Install
 
-**claude.ai** — на странице репозитория нажмите *Code → Download ZIP* и загрузите архив в *Settings → Capabilities → Skills*.
+**claude.ai** — on the repository page click *Code → Download ZIP* and upload the archive in *Settings → Capabilities → Skills*.
 
-**Claude Code** — склонируйте в папку скиллов:
+**Claude Code** — clone into your skills folder:
 
 ```bash
 git clone https://github.com/dmminga1983/minga-prompt-audit ~/.claude/skills/minga-prompt-audit
 ```
 
-## Использование
+## Usage
 
-Просто попросите:
+Just ask:
+
+> Audit my CLAUDE.md and skills for outdated prompting
+
+> Run an audit on `.claude/skills/report`
 
 > Проверь мой CLAUDE.md и скиллы на устаревшие промпты
 
-> Сделай аудит `.claude/skills/report`
+The report is grouped by severity — 🔴 critical · 🟠 important · ⚪ cosmetic — with file, line and quote for every finding, followed by one combined diff. Reply "apply all" or list the IDs to apply.
 
-> Audit the system prompt in `src/agent.py`
-
-Отчёт придёт по уровням 🔴 критично · 🟠 важно · ⚪ косметика, с файлом, строкой и цитатой, а в конце — общий diff. Ответьте «применить всё» или перечислите ID.
-
-### Сканер отдельно
+### Scanner on its own
 
 ```bash
-python3 scripts/scan.py                        # CLAUDE.md, AGENTS.md, SKILL.md и .claude/ в текущей папке
-python3 scripts/scan.py .claude/skills/report  # конкретная папка
-python3 scripts/scan.py --home --format json   # плюс ~/.claude, вывод в JSON
+python3 scripts/scan.py                        # CLAUDE.md, AGENTS.md, SKILL.md and .claude/ in the current folder
+python3 scripts/scan.py .claude/skills/report  # a specific folder
+python3 scripts/scan.py --home --format json   # also ~/.claude, JSON output
 ```
 
-Сканер ловит механические проблемы (блоки A, C, D). Противоречия (B) и смысловые проверки делает модель по скиллу.
+The scanner catches mechanical issues (blocks A, C, D). Conflicts (B) and judgement-based checks are done by the model following the skill.
 
-### Защитить строки от аудита
+### Protecting lines from the audit
 
 ```markdown
-Эту строку не трогать <!-- keep -->
+Leave this line alone <!-- keep -->
 
 <!-- keep:start -->
-ВЕСЬ ЭТОТ БЛОК ОСТАЁТСЯ КАК ЕСТЬ
+THIS WHOLE BLOCK STAYS AS IS
 <!-- keep:end -->
 ```
 
-## Разработка
+## Development
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-Нужен только Python 3.8+, внешних зависимостей нет.
+Python 3.8+ only, no external dependencies.
 
-## Лицензия
+## License
 
-[MIT](LICENSE). Каталог проверок написан с нуля и не копирует внутренние инструкции Anthropic.
+[MIT](LICENSE). The check catalogue is original work and does not copy Anthropic's internal guides.
