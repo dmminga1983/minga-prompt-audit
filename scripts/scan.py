@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""minga-prompt-audit scanner — механические проверки блоков A, C, D.
+"""minga-prompt-audit scanner — механические проверки блоков A, C, D, E, F.
 
 Только стандартная библиотека Python 3.8+. Ничего не отправляет в сеть
 и не меняет файлы. Вывод — черновик для ручной перепроверки моделью.
@@ -17,7 +17,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"}
 INSTRUCTION_NAMES = {"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "SKILL.md"}
@@ -67,6 +67,73 @@ RE_IMPORT = re.compile(r"(?<![\w`])@(~?[\w.\-/]*[\w\-]+(?:\.\w+|/))")
 RE_MD_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 PATH_EXTS = (".md", ".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".yaml", ".yml",
              ".sh", ".txt", ".toml", ".cfg", ".ini", ".sql", ".css", ".html")
+
+# --- E. Структура SKILL.md ---
+RE_KEBAB = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+RE_FM_KEY = re.compile(r"^([A-Za-z_][\w-]*)\s*:(.*)$")
+DESCRIPTION_LIMIT = 1024
+SKILL_DIRS = ("references", "scripts", "assets", "templates", "checks", "examples")
+RE_SKILL_REF = re.compile(
+    r"(?<![\w./-])((?:\./)?(?:" + "|".join(SKILL_DIRS) + r")/[\w./-]*[\w-](?:\.\w+)?/?)"
+)
+ZIP_SUFFIXES = ("-main", "-master")
+
+# --- F. Секреты и персональные данные ---
+SECRET_PATTERNS = [
+    ("ключ доступа AWS", re.compile(r"\b((?:AKIA|ASIA)[0-9A-Z]{16})\b")),
+    ("токен GitHub", re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{30,})\b")),
+    ("токен GitHub", re.compile(r"\b(github_pat_[A-Za-z0-9_]{22,})")),
+    ("ключ API sk-…", re.compile(r"(?<![\w-])(sk-[A-Za-z0-9_-]{20,})")),
+    ("токен Slack", re.compile(r"\b(xox[bpoas]-[A-Za-z0-9-]{10,})")),
+    ("приватный ключ", re.compile(r"(-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----)")),
+    ("пароль/токен в присваивании", re.compile(
+        r"(?i)\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|пароль)\b"
+        r"[\w-]*\s*[:=]\s*[\"']([^\"'\s]{4,})[\"']")),
+]
+RE_PLACEHOLDER = re.compile(r"^(<.*>|\$\{?.*\}?|\*+|x+|\.+|your[-_].*|changeme|example|none|null|true|false)$", re.I)
+RE_EMAIL = re.compile(r"(?<![\w.+-])([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})(?![\w-])")
+EMAIL_SAFE_DOMAIN = re.compile(r"(^|\.)(example\.[a-z]+|[\w-]+\.(invalid|test|example|localhost)|localhost)$", re.I)
+EMAIL_SAFE_LOCAL = re.compile(r"^(no-?reply|donotreply)$", re.I)
+RE_PHONE = re.compile(
+    r"(?<![\w+])("
+    r"(?:\+7|8)[\s-]?\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}"
+    r"|\+(?:[1-689]\d{0,2})[\s-]?\(?\d{2,4}\)?(?:[\s-]?\d{2,4}){2,3}"
+    r")(?![\w])"
+)
+
+
+def mask(value: str) -> str:
+    """Первые 4 символа и «…» — полное значение в отчёт не попадает."""
+    return value[:4] + "…"
+
+
+def parse_frontmatter(text: str):
+    """Простой разбор YAML-frontmatter без внешних библиотек.
+    Возвращает (поля, номер закрывающей строки, ошибка или None)."""
+    rows = text.splitlines()
+    if not rows or rows[0].strip() != "---":
+        return {}, 0, "файл не начинается с YAML-frontmatter (`---`)"
+    fields: dict = {}
+    key = None
+    for i, raw in enumerate(rows[1:], 2):
+        if raw.strip() == "---":
+            return fields, i, None
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        if raw[0] in " \t" and key:
+            fields[key] = (fields[key] + " " + raw.strip()).strip()
+            continue
+        if raw.lstrip().startswith("- ") and key:
+            continue
+        m = RE_FM_KEY.match(raw)
+        if not m:
+            return fields, i, f"строка {i} во frontmatter не похожа на `ключ: значение`"
+        key, val = m.group(1), m.group(2).strip()
+        if val in (">", "|", ">-", "|-", ">+", "|+"):
+            val = ""
+        fields[key] = val.strip("\"'") if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'" else val
+    return fields, 0, "нет закрывающей строки `---` у frontmatter"
+
 
 FENCE = re.compile(r"^\s*(```|~~~)")
 KEEP_LINE = "<!-- keep -->"
@@ -158,13 +225,57 @@ def scan_file(path: Path, root: Path, display: str) -> tuple[list[Finding], int,
     out: list[Finding] = []
     norms: dict = {}
 
-    def add(fid, sev, ln, msg):
-        out.append(Finding(fid, sev, display, ln.no, short(ln.text), msg))
+    def add(fid, sev, ln, msg, quote=None):
+        out.append(Finding(fid, sev, display, ln.no, short(quote if quote is not None else ln.text), msg))
+
+    is_skill = path.name == "SKILL.md"
+    c1_refs: set = set()
+    masks: dict = {}  # номер строки -> замаскированные фрагменты
+
+    # F1/F2 — по всем строкам, включая блоки кода: секрет в примере остаётся секретом.
+    for ln in lines:
+        if ln.keep:
+            continue
+        masked, kinds = ln.text, []
+        for kind, rx in SECRET_PATTERNS:
+            for m in rx.finditer(ln.text):
+                val = m.group(1)
+                if RE_PLACEHOLDER.match(val):
+                    continue
+                masked = masked.replace(val, mask(val))
+                masks.setdefault(ln.no, []).append(mask(val))
+                kinds.append(kind)
+        if kinds:
+            add("F1", "critical", ln, "Секрет в тексте: " + ", ".join(dict.fromkeys(kinds))
+                + " — отозвать и хранить вне промпта", masked)
+        pii, pmasked = [], masked
+        for m in RE_EMAIL.finditer(ln.text):
+            addr = m.group(1)
+            local, _, domain = addr.partition("@")
+            if EMAIL_SAFE_DOMAIN.search(domain) or EMAIL_SAFE_LOCAL.match(local):
+                continue
+            pmasked = pmasked.replace(addr, mask(addr))
+            masks.setdefault(ln.no, []).append(mask(addr))
+            pii.append("почта")
+        for m in RE_PHONE.finditer(ln.text):
+            num = m.group(1)
+            if sum(c.isdigit() for c in num) < 10:
+                continue
+            pmasked = pmasked.replace(num, mask(num))
+            masks.setdefault(ln.no, []).append(mask(num))
+            pii.append("телефон")
+        if pii:
+            add("F2", "important", ln, "Персональные данные: " + ", ".join(dict.fromkeys(pii)), pmasked)
+        # Дальше строка участвует в проверках только в замаскированном виде,
+        # чтобы секрет не попал в цитату другой находки (A1, D1 и т.д.).
+        ln.text = pmasked
 
     for ln in lines:
         if ln.keep or ln.code:
             continue
         prose = RE_INLINE_CODE.sub(" ", ln.text)
+        for m in masks.get(ln.no, ()):
+            prose = prose.replace(m, " ")
 
         caps = [w for w in RE_CAPS_WORD.findall(prose) if w.upper() not in CAPS_ALLOW]
         if caps or RE_BANG.search(prose):
@@ -191,6 +302,7 @@ def scan_file(path: Path, root: Path, display: str) -> tuple[list[Finding], int,
         for ref in sorted(refs):
             if not path_exists(ref, path.parent, root):
                 add("C1", "critical", ln, f"Путь не найден: {ref}")
+                c1_refs.add((ln.no, ref.split("#")[0].rstrip(".,;:").lstrip("./")))
 
         n = norm(ln.text)
         if len(n) >= 25:
@@ -202,11 +314,59 @@ def scan_file(path: Path, root: Path, display: str) -> tuple[list[Finding], int,
             if not ln.keep:
                 add("D2", "cosmetic", ln, f"Блок кода/пример на {length} строк (> {LONG_EXAMPLE})")
 
+    if is_skill:
+        out += check_skill(path, text, lines, display, c1_refs)
+
     limit = SIZE_LIMITS.get(path.name, DEFAULT_SIZE_LIMIT)
     if len(lines) > limit:
         out.append(Finding("D4", "important", display, 1, path.name,
                            f"Файл {len(lines)} строк (ориентир ≤ {limit}) — вынести детали в отдельные файлы"))
     return out, len(lines), kept, norms
+
+
+def check_skill(path: Path, text: str, lines: list, display: str, c1_refs: set) -> list:
+    """E1, E2, E4, E6 — только для SKILL.md."""
+    res: list[Finding] = []
+    first = lines[0].text if lines else ""
+    fields, fm_end, err = parse_frontmatter(text)
+    if err:
+        res.append(Finding("E1", "critical", display, 1, short(first), f"Frontmatter: {err}"))
+    else:
+        for k in ("name", "description"):
+            if not fields.get(k, "").strip():
+                res.append(Finding("E1", "critical", display, 1, short(first),
+                                   f"Во frontmatter нет поля `{k}` или оно пустое"))
+    name = fields.get("name", "").strip()
+    if name:
+        no = next((l.no for l in lines if l.text.lstrip().startswith("name:")), 1)
+        folder = path.parent.name
+        for suf in ZIP_SUFFIXES:
+            if folder.endswith(suf) and folder[: -len(suf)] == name:
+                folder = name
+        if not RE_KEBAB.match(name):
+            res.append(Finding("E2", "important", display, no, short(name),
+                               "`name` не в kebab-case (строчные латинские буквы, цифры, дефисы)"))
+        elif folder != name:
+            res.append(Finding("E2", "important", display, no, short(name),
+                               f"`name` не совпадает с папкой скилла: {folder}"))
+    desc = fields.get("description", "")
+    if len(desc) > DESCRIPTION_LIMIT:
+        no = next((l.no for l in lines if l.text.lstrip().startswith("description:")), 1)
+        res.append(Finding("E4", "important", display, no, short(desc),
+                           f"`description` {len(desc)} символов (ориентир ≤ {DESCRIPTION_LIMIT})"))
+    seen: set = set()
+    for ln in lines:
+        if ln.keep or ln.no <= fm_end:
+            continue
+        for ref in RE_SKILL_REF.findall(RE_MD_LINK.sub(lambda m: " " + m.group(1) + " ", ln.text)):
+            clean = ref.rstrip(".,;:").lstrip("./")
+            if not looks_like_path(clean) or (ln.no, clean) in c1_refs or (ln.no, clean) in seen:
+                continue
+            if not (path.parent / clean).exists():
+                seen.add((ln.no, clean))
+                res.append(Finding("E6", "critical", display, ln.no, short(ln.text),
+                                   f"Файла скилла нет: {clean}"))
+    return res
 
 
 def discover(paths: list[str], root: Path, home: bool) -> list[Path]:
@@ -281,7 +441,7 @@ def to_md(res: dict) -> str:
         f"Проверено: {res['files']} файлов, {res['lines']} строк. Защищено `keep`: {res['kept']} строк.",
         f"Итог: 🔴 {cnt['critical']} · 🟠 {cnt['important']} · ⚪ {cnt['cosmetic']}",
         "",
-        "_Механические находки. Каждую перепроверить по контексту; блок B и смысловые проверки — вручную._",
+        "_Механические находки. Каждую перепроверить по контексту; блоки B, G, H и проверки E3, E5, F3, F4 — вручную._",
     ]
     for sev, title in SEV_TITLE.items():
         items = [x for x in f if x["severity"] == sev]

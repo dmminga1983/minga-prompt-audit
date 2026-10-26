@@ -1,8 +1,8 @@
 # minga-prompt-audit
 
-**An audit skill for Claude prompts and skills: outdated techniques, conflicts, dead references and bloat — reported line by line with a ready-to-apply diff.**
+**An audit skill for Claude prompts and skills: outdated techniques, conflicts, dead references, bloat, skill structure, security, clarity and triggering — reported line by line with a ready-to-apply diff.**
 
-Part of the [Minga](https://github.com/dmminga1983/minga) ecosystem. The skill checks `CLAUDE.md`, `AGENTS.md`, `SKILL.md`, rules, commands, subagents and system prompts for patterns that hold modern Claude models back: ALL-CAPS pressure, forced reasoning scaffolds, rules that contradict each other, references to files that don't exist, duplicates. Nothing in your files changes until you say "apply".
+Part of the [Minga](https://github.com/dmminga1983/minga) ecosystem. The skill checks `CLAUDE.md`, `AGENTS.md`, `SKILL.md`, rules, commands, subagents and system prompts for patterns that hold modern Claude models back: ALL-CAPS pressure, forced reasoning scaffolds, rules that contradict each other, references to files that don't exist, duplicates, broken skill frontmatter, leaked secrets and personal data, vague requirements, skills that never trigger. Nothing in your files changes until you say "apply".
 
 [Русская версия →](README.ru.md)
 
@@ -16,7 +16,7 @@ Part of the [Minga](https://github.com/dmminga1983/minga) ecosystem. The skill c
 | Deterministic scanner | — | `scripts/scan.py`, no dependencies, with tests |
 | Protected lines | keep-list | `<!-- keep -->` and `<!-- keep:start -->…<!-- keep:end -->` blocks |
 
-## What it checks (v1.0)
+## What it checks (v1.1)
 
 | Block | Checks |
 |---|---|
@@ -24,10 +24,14 @@ Part of the [Minga](https://github.com/dmminga1983/minga) ecosystem. The skill c
 | **B. Conflicts** | B1 within a file · B2 across files · B3 format/language · B4 unclear priority |
 | **C. Dead references** | C1 files and `@imports` · C2 commands and scripts · C3 tools and skills · C4 outdated model names |
 | **D. Bloat** | D1 duplicates · D2 long examples · D3 the obvious · D4 oversized files |
+| **E. SKILL.md structure** | E1 missing or broken frontmatter · E2 `name` not kebab-case or not matching the folder · E3 vague `description` · E4 `description` over ~1024 characters · E5 no step-by-step order · E6 links to missing skill files |
+| **F. Security** | F1 secrets (AWS, GitHub, Slack, `sk-` keys, private keys, `password = "..."`) · F2 personal data (phones, emails, ID numbers) · F3 obeying instructions from external content (prompt injection) · F4 dangerous actions without confirmation |
+| **G. Clarity** | G1 vague requirement with no success criterion · G2 no output format · G3 no stop condition or point to ask the user · G4 unexplained jargon and abbreviations |
+| **H. Skill triggering** | H1 no real trigger phrases (RU and EN) · H2 overlap with another skill in the same folder · H3 overly broad trigger · H4 no "when not to use" next to a similar skill |
 
 Detailed criteria are in [checks/](checks/) (in Russian), before/after examples in [examples/](examples/before-after.md).
 
-**Coming in 1.1:** E — SKILL.md structure and `description` quality, F — security (secrets in prompts, prompt injection in tool descriptions), G — clarity (success criteria and output format), H — skill triggering.
+Secrets and personal data are masked in every report: only the first 4 characters are shown.
 
 ## Install
 
@@ -59,7 +63,7 @@ python3 scripts/scan.py .claude/skills/report  # a specific folder
 python3 scripts/scan.py --home --format json   # also ~/.claude, JSON output
 ```
 
-The scanner catches mechanical issues (blocks A, C, D). Conflicts (B) and judgement-based checks are done by the model following the skill.
+The scanner catches mechanical issues: A1–A4, C1, C4, D1, D2, D4, E1, E2, E4, E6 (for `SKILL.md` only), F1 and F2. Conflicts (B), clarity (G), triggering (H) and the other judgement-based checks (E3, E5, F3, F4) are done by the model following the skill.
 
 ### Protecting lines from the audit
 
